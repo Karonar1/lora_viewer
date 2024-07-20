@@ -13,10 +13,11 @@ use crate::metadata::LoraData;
 #[derive(Default, Serialize, Deserialize)]
 pub struct App {
     lora_file: Option<PathBuf>,
+    selected: usize,
     #[serde(skip)]
     open_dialog: Option<FileDialog>,
     #[serde(skip)]
-    metadata: Option<LoraData>,
+    metadata: Option<Vec<(PathBuf, Option<LoraData>)>>,
 }
 
 impl App {
@@ -26,12 +27,10 @@ impl App {
                 lora_file: PathBuf::from_str(&path).ok(),
                 ..Default::default()
             }
+        } else if let Some(storage) = cc.storage {
+            eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
         } else {
-            if let Some(storage) = cc.storage {
-                eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
-            } else {
-                Default::default()
-            }
+            Default::default()
         }
     }
 }
@@ -50,12 +49,29 @@ impl eframe::App for App {
                             let ext = Some(OsStr::new("safetensors"));
                             move |path: &Path| -> bool { path.extension() == ext }
                         });
-                        let mut dialog = FileDialog::open_file(
-                            self.lora_file
-                                .as_ref()
-                                .and_then(|path| path.parent().map(|p| p.to_path_buf())),
-                        )
-                        .show_files_filter(filter);
+                        let mut dialog =
+                            FileDialog::open_file(self.lora_file.as_ref().and_then(|path| {
+                                if path.is_file() {
+                                    path.parent().map(|p| p.to_path_buf())
+                                } else {
+                                    Some(path.to_path_buf())
+                                }
+                            }))
+                            .show_files_filter(filter);
+                        dialog.open();
+                        self.open_dialog = Some(dialog);
+                    }
+                    if ui.button("Scan directory").clicked() {
+                        let filter = Box::new(|path: &Path| -> bool { path.is_dir() });
+                        let mut dialog =
+                            FileDialog::select_folder(self.lora_file.as_ref().and_then(|path| {
+                                if path.is_file() {
+                                    path.parent().map(|p| p.to_path_buf())
+                                } else {
+                                    Some(path.to_path_buf())
+                                }
+                            }))
+                            .show_files_filter(filter);
                         dialog.open();
                         self.open_dialog = Some(dialog);
                     }
@@ -78,8 +94,71 @@ impl eframe::App for App {
 
         if self.metadata.is_none() {
             if let Some(lora) = &self.lora_file {
-                if let Ok(buffer) = std::fs::read(lora) {
-                    self.metadata = Some(LoraData::from_buffer(&buffer).unwrap_or_default());
+                if lora.is_file() {
+                    self.metadata = Some(vec![(lora.clone(), None)]);
+                } else if lora.is_dir() {
+                    if let Ok(files) = std::fs::read_dir(lora) {
+                        let ext = Some(OsStr::new("safetensors"));
+                        self.metadata = Some(
+                            files
+                                .into_iter()
+                                .filter_map(|f| {
+                                    f.ok().and_then(|f| {
+                                        let path = f.path();
+                                        if path.is_file() && path.extension() == ext {
+                                            Some((path, None))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                })
+                                .collect(),
+                        );
+                    }
+                }
+                self.selected = 0;
+            }
+        }
+
+        if let Some(path) = &self.lora_file {
+            if path.is_dir() {
+                egui::SidePanel::left("left_panel").show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui::Grid::new("tags")
+                                .num_columns(2)
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    if let Some(metadata) = &self.metadata {
+                                        for (index, (path, _)) in metadata.iter().enumerate() {
+                                            if ui
+                                                .label(path.file_name().unwrap().to_string_lossy())
+                                                .clicked()
+                                            {
+                                                self.selected = index;
+                                            };
+                                            ui.allocate_space(egui::vec2(
+                                                ui.available_width(),
+                                                0.0,
+                                            ));
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+                        });
+                });
+            }
+        }
+
+        if let Some(ref mut metadata) = &mut self.metadata {
+            if self.selected < metadata.len() && metadata[self.selected].1.is_none() {
+                let path = &metadata[self.selected].0;
+                if let Ok(buffer) = std::fs::read(path) {
+                    metadata[self.selected].1 =
+                        Some(LoraData::from_buffer(&buffer).unwrap_or_default());
+                } else {
+                    metadata[self.selected].1 = Some(Default::default());
                 }
             }
         }
@@ -90,6 +169,11 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label("LoRA name: ");
                 if let Some(file) = &self.lora_file {
+                    let file = if file.is_file() {
+                        file
+                    } else {
+                        &self.metadata.as_ref().unwrap()[self.selected].0
+                    };
                     ui.label(file.file_stem().unwrap().to_string_lossy());
                 }
             });
@@ -97,6 +181,7 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label("Base model: ");
                 if let Some(metadata) = &self.metadata {
+                    let metadata = metadata[self.selected].1.as_ref().unwrap();
                     ui.label(
                         metadata
                             .base_model
@@ -109,6 +194,7 @@ impl eframe::App for App {
             ui.separator();
 
             if let Some(metadata) = &self.metadata {
+                let metadata = metadata[self.selected].1.as_ref().unwrap();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
