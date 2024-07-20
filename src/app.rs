@@ -126,14 +126,29 @@ impl eframe::App for App {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            let selected = self.selected;
                             egui::Grid::new("tags")
                                 .num_columns(2)
-                                .striped(true)
+                                .with_row_color(move |i, style| {
+                                    if i == selected {
+                                        Some(egui::Color32::YELLOW)
+                                    } else if i % 2 == 1 {
+                                        Some(style.visuals.faint_bg_color)
+                                    } else {
+                                        None
+                                    }
+                                })
                                 .show(ui, |ui| {
                                     if let Some(metadata) = &self.metadata {
                                         for (index, (path, _)) in metadata.iter().enumerate() {
                                             if ui
-                                                .label(path.file_name().unwrap().to_string_lossy())
+                                                .add(
+                                                    egui::Label::new(
+                                                        path.file_name().unwrap().to_string_lossy(),
+                                                    )
+                                                    .selectable(false)
+                                                    .sense(egui::Sense::click()),
+                                                )
                                                 .clicked()
                                             {
                                                 self.selected = index;
