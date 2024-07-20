@@ -1,8 +1,10 @@
+#![windows_subsystem = "windows"]
+
 use clap::Parser;
 use eframe::egui;
 
 mod app;
-pub mod metadata;
+mod metadata;
 
 #[derive(Parser)]
 struct Args {
