@@ -18,6 +18,7 @@ pub struct App {
     open_dialog: Option<FileDialog>,
     #[serde(skip)]
     metadata: Option<Vec<(PathBuf, Option<LoraData>)>>,
+    metadata_dialog: bool,
 }
 
 impl App {
@@ -92,6 +93,8 @@ impl eframe::App for App {
                     if let Some(path) = dialog.path() {
                         self.lora_file = Some(path.to_path_buf());
                         self.metadata = None;
+                        self.selected = 0;
+                        self.metadata_dialog = false;
                     }
                 }
             }
@@ -124,7 +127,6 @@ impl eframe::App for App {
                         );
                     }
                 }
-                self.selected = 0;
             }
         }
 
@@ -149,6 +151,7 @@ impl eframe::App for App {
                                         .clicked()
                                     {
                                         self.selected = index;
+                                        self.metadata_dialog = false;
                                     };
                                 }
                             }
@@ -181,6 +184,9 @@ impl eframe::App for App {
                 ui.label("LoRA name: ");
                 if let Some(metadata) = selected {
                     ui.label(metadata.0.file_stem().unwrap().to_string_lossy());
+                    if ui.button("Full metadata").clicked() {
+                        self.metadata_dialog = true;
+                    }
                 }
             });
 
@@ -218,5 +224,40 @@ impl eframe::App for App {
                     });
             }
         });
+
+        if let Some(metadata) = selected {
+            if self.metadata_dialog {
+                ctx.show_viewport_immediate(
+                    egui::ViewportId::from_hash_of("metadata_window"),
+                    egui::ViewportBuilder::default()
+                        .with_title("LoRA metadata")
+                        .with_inner_size([600.0, 300.0]),
+                    |ctx, _class| {
+                        if ctx.input(|i| i.viewport().close_requested()) {
+                            self.metadata_dialog = false;
+                        }
+                        let metadata = metadata.1.as_ref().unwrap();
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    egui::Grid::new("metadata")
+                                        .num_columns(2)
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            for (tag, value) in &metadata.raw_metadata {
+                                                ui.label(tag);
+                                                ui.add(egui::Label::new(value).wrap());
+                                                ui.end_row();
+                                            }
+                                        })
+                                })
+                        });
+                    },
+                );
+            }
+        } else {
+            self.metadata_dialog = false;
+        }
     }
 }
