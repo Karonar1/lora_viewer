@@ -8,7 +8,7 @@ use eframe::egui;
 use egui_file::FileDialog;
 use serde::{Deserialize, Serialize};
 
-use crate::metadata::LoraData;
+use crate::metadata::{read_header, LoraData};
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct App {
@@ -166,7 +166,7 @@ impl eframe::App for App {
         if let Some(ref mut metadata) = &mut self.metadata {
             if self.selected < metadata.len() && metadata[self.selected].1.is_none() {
                 let path = &metadata[self.selected].0;
-                if let Ok(buffer) = std::fs::read(path) {
+                if let Ok(buffer) = read_header(path) {
                     metadata[self.selected].1 =
                         Some(LoraData::from_buffer(&buffer).unwrap_or_default());
                 } else {
