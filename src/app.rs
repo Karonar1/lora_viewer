@@ -61,6 +61,7 @@ impl eframe::App for App {
                             .show_files_filter(filter);
                         dialog.open();
                         self.open_dialog = Some(dialog);
+                        ui.close_menu();
                     }
                     if ui.button("Scan directory").clicked() {
                         let filter = Box::new(|path: &Path| -> bool { path.is_dir() });
@@ -75,9 +76,11 @@ impl eframe::App for App {
                             .show_files_filter(filter);
                         dialog.open();
                         self.open_dialog = Some(dialog);
+                        ui.close_menu();
                     }
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        ui.close_menu();
                     }
                 });
                 ui.add_space(16.0);
