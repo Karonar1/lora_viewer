@@ -41,6 +41,7 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        // Menu bar
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -82,6 +83,7 @@ impl eframe::App for App {
                 ui.add_space(16.0);
             });
 
+            // Set path and clear metadata if open dialog has finished
             if let Some(dialog) = &mut self.open_dialog {
                 if dialog.show(ctx).selected() {
                     if let Some(path) = dialog.path() {
@@ -92,11 +94,14 @@ impl eframe::App for App {
             }
         });
 
+        // Populate the metadata record if it's empty and we have a path defined
         if self.metadata.is_none() {
             if let Some(lora) = &self.lora_file {
                 if lora.is_file() {
+                    // If the path is a single file, we just have one record
                     self.metadata = Some(vec![(lora.clone(), None)]);
                 } else if lora.is_dir() {
+                    // Otherwise scan the directory and add all safetensors files
                     if let Ok(files) = std::fs::read_dir(lora) {
                         let ext = Some(OsStr::new("safetensors"));
                         self.metadata = Some(
@@ -120,6 +125,9 @@ impl eframe::App for App {
             }
         }
 
+        // We may now assume that if a path is defined, metadata is valid
+
+        // If our path is to a directory, add a side panel to select LoRAs
         if let Some(path) = &self.lora_file {
             if path.is_dir() {
                 egui::SidePanel::left("left_panel").show(ctx, |ui| {
@@ -127,45 +135,26 @@ impl eframe::App for App {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let selected = self.selected;
-                            egui::Grid::new("tags")
-                                .num_columns(2)
-                                .with_row_color(move |i, style| {
-                                    if i == selected {
-                                        Some(egui::Color32::YELLOW)
-                                    } else if i % 2 == 1 {
-                                        Some(style.visuals.faint_bg_color)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .show(ui, |ui| {
-                                    if let Some(metadata) = &self.metadata {
-                                        for (index, (path, _)) in metadata.iter().enumerate() {
-                                            if ui
-                                                .add(
-                                                    egui::Label::new(
-                                                        path.file_name().unwrap().to_string_lossy(),
-                                                    )
-                                                    .selectable(false)
-                                                    .sense(egui::Sense::click()),
-                                                )
-                                                .clicked()
-                                            {
-                                                self.selected = index;
-                                            };
-                                            ui.allocate_space(egui::vec2(
-                                                ui.available_width(),
-                                                0.0,
-                                            ));
-                                            ui.end_row();
-                                        }
-                                    }
-                                });
+
+                            if let Some(metadata) = &self.metadata {
+                                for (index, (path, _)) in metadata.iter().enumerate() {
+                                    if ui
+                                        .add(egui::widgets::SelectableLabel::new(
+                                            index == selected,
+                                            path.file_name().unwrap().to_string_lossy(),
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.selected = index;
+                                    };
+                                }
+                            }
                         });
                 });
             }
         }
 
+        // Ensure that the metadata for the selected LoRA is actually loaded
         if let Some(ref mut metadata) = &mut self.metadata {
             if self.selected < metadata.len() && metadata[self.selected].1.is_none() {
                 let path = &metadata[self.selected].0;
@@ -178,25 +167,24 @@ impl eframe::App for App {
             }
         }
 
+        // Get a reference to the selected entry, if it exists. The metadata is guaranteed to be
+        // defined, even if the file couldn't be loaded
+        let selected = self.metadata.as_ref().and_then(|m| m.get(self.selected));
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("LoRA Metadata Viewer");
 
             ui.horizontal(|ui| {
                 ui.label("LoRA name: ");
-                if let Some(file) = &self.lora_file {
-                    let file = if file.is_file() {
-                        file
-                    } else {
-                        &self.metadata.as_ref().unwrap()[self.selected].0
-                    };
-                    ui.label(file.file_stem().unwrap().to_string_lossy());
+                if let Some(metadata) = selected {
+                    ui.label(metadata.0.file_stem().unwrap().to_string_lossy());
                 }
             });
 
             ui.horizontal(|ui| {
                 ui.label("Base model: ");
-                if let Some(metadata) = &self.metadata {
-                    let metadata = metadata[self.selected].1.as_ref().unwrap();
+                if let Some(metadata) = selected {
+                    let metadata = metadata.1.as_ref().unwrap();
                     ui.label(
                         metadata
                             .base_model
@@ -208,8 +196,8 @@ impl eframe::App for App {
 
             ui.separator();
 
-            if let Some(metadata) = &self.metadata {
-                let metadata = metadata[self.selected].1.as_ref().unwrap();
+            if let Some(metadata) = selected {
+                let metadata = metadata.1.as_ref().unwrap();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
