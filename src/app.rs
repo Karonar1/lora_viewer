@@ -110,8 +110,8 @@ impl eframe::App for App {
                     // Otherwise scan the directory and add all safetensors files
                     if let Ok(files) = std::fs::read_dir(lora) {
                         let ext = Some(OsStr::new("safetensors"));
-                        self.metadata = Some(
-                            files
+                        self.metadata = Some({
+                            let mut files: Vec<_> = files
                                 .into_iter()
                                 .filter_map(|f| {
                                     f.ok().and_then(|f| {
@@ -123,8 +123,10 @@ impl eframe::App for App {
                                         }
                                     })
                                 })
-                                .collect(),
-                        );
+                                .collect();
+                            files.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                            files
+                        });
                     }
                 }
             }
@@ -237,6 +239,8 @@ impl eframe::App for App {
                             self.metadata_dialog = false;
                         }
                         let metadata = metadata.1.as_ref().unwrap();
+                        let mut metadata: Vec<_> = metadata.raw_metadata.iter().collect();
+                        metadata.sort();
                         egui::CentralPanel::default().show(ctx, |ui| {
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
@@ -245,7 +249,7 @@ impl eframe::App for App {
                                         .num_columns(2)
                                         .striped(true)
                                         .show(ui, |ui| {
-                                            for (tag, value) in &metadata.raw_metadata {
+                                            for (tag, value) in metadata {
                                                 ui.label(tag);
                                                 ui.add(egui::Label::new(value).wrap());
                                                 ui.end_row();

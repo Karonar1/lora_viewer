@@ -21,27 +21,7 @@ impl LoraData {
             .iter()
             .collect();
 
-        let frequencies = metadata
-            .get(&"ss_tag_frequency".to_string())
-            .ok_or(anyhow!("Could not get tag frequencies"))?;
-        let mut all_tags = HashMap::new();
-        let frequencies: JsonValue = frequencies.parse().unwrap();
-        let JsonValue::Object(dirs) = frequencies else {
-            bail!("Unexpected json structure")
-        };
-        for dir in dirs.iter() {
-            let JsonValue::Object(tags) = dir.1 else {
-                bail!("Unexpected json structure")
-            };
-            for tag in tags {
-                all_tags
-                    .entry(tag.0.to_string())
-                    .and_modify(|v| *v += tag.1.get::<f64>().unwrap())
-                    .or_insert(*tag.1.get::<f64>().unwrap());
-            }
-        }
-        let mut all_tags: Vec<_> = all_tags.into_iter().collect();
-        all_tags.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let all_tags = tag_frequencies(&metadata).ok().unwrap_or_default();
 
         Ok(LoraData {
             raw_metadata: metadata
@@ -54,4 +34,29 @@ impl LoraData {
                 .map(|s| s.to_string()),
         })
     }
+}
+
+fn tag_frequencies(metadata: &HashMap<&String, &String>) -> Result<Vec<(String, f64)>> {
+    let frequencies = metadata
+        .get(&"ss_tag_frequency".to_string())
+        .ok_or(anyhow!("Could not get tag frequencies"))?;
+    let mut all_tags = HashMap::new();
+    let frequencies: JsonValue = frequencies.parse().unwrap();
+    let JsonValue::Object(dirs) = frequencies else {
+        bail!("Unexpected json structure")
+    };
+    for dir in dirs.iter() {
+        let JsonValue::Object(tags) = dir.1 else {
+            bail!("Unexpected json structure")
+        };
+        for tag in tags {
+            all_tags
+                .entry(tag.0.to_string())
+                .and_modify(|v| *v += tag.1.get::<f64>().unwrap())
+                .or_insert(*tag.1.get::<f64>().unwrap());
+        }
+    }
+    let mut all_tags: Vec<_> = all_tags.into_iter().collect();
+    all_tags.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    Ok(all_tags)
 }
