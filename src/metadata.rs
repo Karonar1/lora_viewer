@@ -13,6 +13,7 @@ pub struct LoraData {
     pub raw_metadata: HashMap<String, String>,
     pub tag_frequencies: Vec<(String, f64)>,
     pub base_model: Option<String>,
+    pub tensors: Vec<(String, Vec<usize>)>,
 }
 
 /// Read the header of a safetensors file, padding to the full model size
@@ -57,6 +58,14 @@ impl LoraData {
 
         let all_tags = tag_frequencies(&metadata).ok().unwrap_or_default();
 
+        let tensors = SafeTensors::deserialize(buffer)?;
+        let mut names = tensors.names();
+        names.sort();
+        let tensors: Result<Vec<_>> = names
+            .into_iter()
+            .map(|name| Ok((name.to_string(), tensors.tensor(name)?.shape().to_vec())))
+            .collect();
+
         Ok(LoraData {
             raw_metadata: metadata
                 .iter()
@@ -66,6 +75,7 @@ impl LoraData {
             base_model: metadata
                 .get(&"ss_sd_model_name".to_string())
                 .map(|s| s.to_string()),
+            tensors: tensors.unwrap_or_default(),
         })
     }
 }

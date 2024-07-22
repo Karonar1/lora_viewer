@@ -19,6 +19,7 @@ pub struct App {
     #[serde(skip)]
     metadata: Option<Vec<(PathBuf, Option<LoraData>)>>,
     metadata_dialog: bool,
+    tensors_dialog: bool,
 }
 
 impl App {
@@ -95,6 +96,7 @@ impl eframe::App for App {
                         self.metadata = None;
                         self.selected = 0;
                         self.metadata_dialog = false;
+                        self.tensors_dialog = false;
                     }
                 }
             }
@@ -154,6 +156,7 @@ impl eframe::App for App {
                                     {
                                         self.selected = index;
                                         self.metadata_dialog = false;
+                                        self.tensors_dialog = false;
                                     };
                                 }
                             }
@@ -188,6 +191,9 @@ impl eframe::App for App {
                     ui.label(metadata.0.file_stem().unwrap().to_string_lossy());
                     if ui.button("Full metadata").clicked() {
                         self.metadata_dialog = true;
+                    }
+                    if ui.button("Tensors").clicked() {
+                        self.tensors_dialog = true;
                     }
                 }
             });
@@ -260,8 +266,45 @@ impl eframe::App for App {
                     },
                 );
             }
+            if self.tensors_dialog {
+                ctx.show_viewport_immediate(
+                    egui::ViewportId::from_hash_of("tensors_window"),
+                    egui::ViewportBuilder::default()
+                        .with_title("Tensor list")
+                        .with_inner_size([600.0, 300.0]),
+                    |ctx, _class| {
+                        if ctx.input(|i| i.viewport().close_requested()) {
+                            self.tensors_dialog = false;
+                        }
+                        let metadata = metadata.1.as_ref().unwrap();
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    egui::Grid::new("tensors")
+                                        .num_columns(3)
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            for (name, shape) in &metadata.tensors {
+                                                ui.label(name);
+                                                let shape: Vec<_> =
+                                                    shape.iter().map(|v| format!("{v}")).collect();
+                                                ui.label(shape.join(", "));
+                                                ui.allocate_space(egui::vec2(
+                                                    ui.available_width(),
+                                                    0.0,
+                                                ));
+                                                ui.end_row();
+                                            }
+                                        })
+                                })
+                        })
+                    },
+                );
+            }
         } else {
             self.metadata_dialog = false;
+            self.tensors_dialog = false;
         }
     }
 }
