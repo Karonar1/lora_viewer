@@ -47,7 +47,7 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open LoRA").clicked() {
+                    if ui.button("Open model").clicked() {
                         let filter = Box::new({
                             let ext = Some(OsStr::new("safetensors"));
                             move |path: &Path| -> bool { path.extension() == ext }
@@ -186,7 +186,7 @@ impl eframe::App for App {
             ui.heading("LoRA Metadata Viewer");
 
             ui.horizontal(|ui| {
-                ui.label("LoRA name: ");
+                ui.label("Model name: ");
                 if let Some(metadata) = selected {
                     ui.label(metadata.0.file_stem().unwrap().to_string_lossy());
                     if ui.button("Full metadata").clicked() {
@@ -199,7 +199,16 @@ impl eframe::App for App {
             });
 
             ui.horizontal(|ui| {
-                ui.label("Base model: ");
+                ui.label("Model type: ");
+                if let Some(metadata) = selected {
+                    for model in &metadata.1.as_ref().unwrap().model_types {
+                        ui.label(model.to_string());
+                    }
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Base checkpoint: ");
                 if let Some(metadata) = selected {
                     let metadata = metadata.1.as_ref().unwrap();
                     ui.label(
