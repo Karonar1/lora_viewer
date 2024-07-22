@@ -52,9 +52,8 @@ impl LoraData {
         let metadata: HashMap<_, _> = metadata
             .metadata()
             .as_ref()
-            .ok_or(anyhow!("Could not read metadata"))?
-            .iter()
-            .collect();
+            .map(|m| m.iter().collect())
+            .unwrap_or_default();
 
         let all_tags = tag_frequencies(&metadata).ok().unwrap_or_default();
 
