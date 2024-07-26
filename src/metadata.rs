@@ -9,29 +9,49 @@ use anyhow::{anyhow, bail, ensure, Result};
 use safetensors::SafeTensors;
 use tinyjson::JsonValue;
 
-#[derive(Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
-pub enum LoraSubtype {
-    LoRA,
-    LoHa,
-    LoKr,
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
+pub enum NetworkType {
+    Unet,
+    SdClip,
+    SdxlClip,
 }
-impl Display for LoraSubtype {
+impl Display for NetworkType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            LoraSubtype::LoRA => "LoRA",
-            LoraSubtype::LoHa => "LoHa",
-            LoraSubtype::LoKr => "LoKr",
+            NetworkType::Unet => "UNet",
+            NetworkType::SdClip => "SD Clip",
+            NetworkType::SdxlClip => "SDXL Clip",
         })
     }
 }
 
-#[derive(Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
+pub enum LoraType {
+    /// Original LoRA type, representing (m*n) residual matrix as product of (m*r) and (r*n)
+    LoRA(NetworkType),
+    /// DoRA type - same as LoRA but with an additional weight vector
+    DoRA(NetworkType),
+    /// LoHa, representing residual matrix as Hadamard transform
+    LoHa(NetworkType),
+    /// LoKr, representing residual matrix as Kronecker product
+    LoKr(NetworkType),
+}
+impl Display for LoraType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&match self {
+            LoraType::LoRA(network) => format!("{network} LoRA"),
+            LoraType::DoRA(network) => format!("{network} DoRA"),
+            LoraType::LoHa(network) => format!("{network} LoHa"),
+            LoraType::LoKr(network) => format!("{network} LoKr"),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
 pub enum ModelType {
     SdCheckpoint,
     SdxlCheckpoint,
-    UnetLora(LoraSubtype),
-    SdClipLora(LoraSubtype),
-    SdxlClipLora(LoraSubtype),
+    Lora(LoraType),
     BakedVae,
     StandaloneVae,
 }
@@ -40,7 +60,7 @@ impl ModelType {
     ///
     /// Given a tensor name, this function _may_ return the type of model it belongs to. In
     /// general, it only returns a non-None value for tensor names that are unique to a model type.
-    fn from_tensor_name(name: &str, shape: &[usize]) -> Option<ModelType> {
+    fn from_tensor_name(name: &str, _shape: &[usize]) -> Option<ModelType> {
         // SDXL has two text models, and SD only has one.
         if name.starts_with("conditioner.embedders.0.") {
             return Some(ModelType::SdxlCheckpoint);
@@ -57,31 +77,31 @@ impl ModelType {
             return Some(ModelType::BakedVae);
         }
 
-        // All remaining model types we recognize are some kind of LoRA, so find the subtype first
-        let subtype = if name.ends_with("lora_down.weight") || name.ends_with("lora_up.weight") {
-            LoraSubtype::LoRA
-        } else if name.ends_with("hada_w1_a") {
-            LoraSubtype::LoHa
-        } else if name.ends_with("lokr_w1") {
-            LoraSubtype::LoKr
+        // All remaining model types we recognize are some kind of LoRA
+        let model = if name.starts_with("lora_te_") {
+            NetworkType::SdClip
+        } else if name.starts_with("lora_te1_") {
+            NetworkType::SdxlClip
+        } else if name.starts_with("lora_unet_down_") || name.starts_with("lora_unet_input_") {
+            NetworkType::Unet
         } else {
             return None;
         };
 
-        if name.starts_with("lora_te_") {
-            return Some(ModelType::SdClipLora(subtype));
-        }
-        if name.starts_with("lora_te1_") {
-            return Some(ModelType::SdxlClipLora(subtype));
-        }
+        // All remaining model types we recognize are some kind of LoRA, so find the subtype first
+        let lora_type = if name.ends_with("lora_down.weight") || name.ends_with("lora_up.weight") {
+            LoraType::LoRA(model)
+        } else if name.ends_with("hada_w1_a") {
+            LoraType::LoHa(model)
+        } else if name.ends_with("lokr_w1") {
+            LoraType::LoKr(model)
+        } else if name.ends_with("dora_scale") {
+            LoraType::DoRA(model)
+        } else {
+            return None;
+        };
 
-        if (name.starts_with("lora_unet_down_") || name.starts_with("lora_unet_input_"))
-            && shape.len() == 2
-        {
-            return Some(ModelType::UnetLora(subtype));
-        }
-
-        None
+        Some(ModelType::Lora(lora_type))
     }
 }
 impl Display for ModelType {
@@ -89,9 +109,7 @@ impl Display for ModelType {
         f.write_str(&match self {
             ModelType::SdCheckpoint => "SD Checkpoint".to_string(),
             ModelType::SdxlCheckpoint => "SDXL Checkpoint".to_string(),
-            ModelType::SdClipLora(subtype) => format!("SD CLIP {subtype}"),
-            ModelType::UnetLora(subtype) => format!("UNet {subtype}"),
-            ModelType::SdxlClipLora(subtype) => format!("SDXL CLIP {subtype}"),
+            ModelType::Lora(lora) => lora.to_string(),
             ModelType::BakedVae => "Baked-in VAE".to_string(),
             ModelType::StandaloneVae => "Standalone VAE".to_string(),
         })
@@ -157,10 +175,23 @@ impl LoraData {
             .collect();
         let tensors = tensors.unwrap_or_default();
 
-        let model_types: HashSet<_> = tensors
+        let mut model_types: HashSet<_> = tensors
             .iter()
             .filter_map(|(name, shape)| ModelType::from_tensor_name(name, shape))
             .collect();
+
+        // DoRA has a strict superset of the tensors in a standard LoRA. If we've detected
+        // DoRA-specific tensors, remove the corresponding LoRA tags.
+        let dora_types: Vec<_> = model_types
+            .iter()
+            .filter_map(|t| match t {
+                ModelType::Lora(LoraType::DoRA(t)) => Some(*t),
+                _ => None,
+            })
+            .collect();
+        dora_types.into_iter().for_each(|t| {
+            model_types.remove(&ModelType::Lora(LoraType::LoRA(t)));
+        });
         let mut model_types: Vec<_> = model_types.into_iter().collect();
         model_types.sort();
 
