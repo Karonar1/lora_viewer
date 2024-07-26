@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt::Display,
     io::{Read, Seek, SeekFrom},
     path::Path,
 };
@@ -9,13 +10,28 @@ use safetensors::SafeTensors;
 use tinyjson::JsonValue;
 
 #[derive(Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
+pub enum LoraSubtype {
+    LoRA,
+    LoHa,
+    LoKr,
+}
+impl Display for LoraSubtype {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            LoraSubtype::LoRA => "LoRA",
+            LoraSubtype::LoHa => "LoHa",
+            LoraSubtype::LoKr => "LoKr",
+        })
+    }
+}
+
+#[derive(Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
 pub enum ModelType {
     SdCheckpoint,
     SdxlCheckpoint,
-    SdUnetLora,
-    SdClipLora,
-    SdxlUnetLora,
-    SdxlClipLora,
+    UnetLora(LoraSubtype),
+    SdClipLora(LoraSubtype),
+    SdxlClipLora(LoraSubtype),
     BakedVae,
     StandaloneVae,
 }
@@ -25,16 +41,7 @@ impl ModelType {
     /// Given a tensor name, this function _may_ return the type of model it belongs to. In
     /// general, it only returns a non-None value for tensor names that are unique to a model type.
     fn from_tensor_name(name: &str, shape: &[usize]) -> Option<ModelType> {
-        // Text LoRAs are easily distinguished, because SDXL has two text models referred to as te1
-        // and te2. SD only has a single model, referred to as te.
-        if name.starts_with("lora_te_") {
-            return Some(ModelType::SdClipLora);
-        }
-        if name.starts_with("lora_te1_") {
-            return Some(ModelType::SdxlClipLora);
-        }
-
-        // The same applies to checkpoints: SDXL has two text models, and SD only has one.
+        // SDXL has two text models, and SD only has one.
         if name.starts_with("conditioner.embedders.0.") {
             return Some(ModelType::SdxlCheckpoint);
         }
@@ -50,34 +57,44 @@ impl ModelType {
             return Some(ModelType::BakedVae);
         }
 
-        // SD LoRAs _usually_ use lora_unet_down and SDXL LoRAs use lora_unet_input, but this is
-        // not reliable. 5120 channels clearly indicates an SDXL UNet, and we can easily
-        // post-process to remove the SD tag if the SDXL one was detected for another tensor.
+        // All remaining model types we recognize are some kind of LoRA, so find the subtype first
+        let subtype = if name.ends_with("lora_down.weight") || name.ends_with("lora_up.weight") {
+            LoraSubtype::LoRA
+        } else if name.ends_with("hada_w1_a") {
+            LoraSubtype::LoHa
+        } else if name.ends_with("lokr_w1") {
+            LoraSubtype::LoKr
+        } else {
+            return None;
+        };
+
+        if name.starts_with("lora_te_") {
+            return Some(ModelType::SdClipLora(subtype));
+        }
+        if name.starts_with("lora_te1_") {
+            return Some(ModelType::SdxlClipLora(subtype));
+        }
+
         if (name.starts_with("lora_unet_down_") || name.starts_with("lora_unet_input_"))
             && shape.len() == 2
         {
-            return match shape[0] {
-                5120 => Some(ModelType::SdxlUnetLora),
-                _ => Some(ModelType::SdUnetLora),
-            };
+            return Some(ModelType::UnetLora(subtype));
         }
 
         None
     }
 }
-impl ToString for ModelType {
-    fn to_string(&self) -> String {
-        match self {
-            ModelType::SdCheckpoint => "SD Checkpoint",
-            ModelType::SdxlCheckpoint => "SDXL Checkpoint",
-            ModelType::SdUnetLora => "SD UNet LoRA",
-            ModelType::SdClipLora => "SD CLIP LoRA",
-            ModelType::SdxlUnetLora => "SDXL UNet LoRA",
-            ModelType::SdxlClipLora => "SDXL CLIP LoRA",
-            ModelType::BakedVae => "Baked-in VAE",
-            ModelType::StandaloneVae => "Standalone VAE",
-        }
-        .to_string()
+impl Display for ModelType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&match self {
+            ModelType::SdCheckpoint => "SD Checkpoint".to_string(),
+            ModelType::SdxlCheckpoint => "SDXL Checkpoint".to_string(),
+            ModelType::SdClipLora(subtype) => format!("SD CLIP {subtype}"),
+            ModelType::UnetLora(subtype) => format!("UNet {subtype}"),
+            ModelType::SdxlClipLora(subtype) => format!("SDXL CLIP {subtype}"),
+            ModelType::BakedVae => "Baked-in VAE".to_string(),
+            ModelType::StandaloneVae => "Standalone VAE".to_string(),
+        })
     }
 }
 
@@ -140,13 +157,10 @@ impl LoraData {
             .collect();
         let tensors = tensors.unwrap_or_default();
 
-        let mut model_types: HashSet<_> = tensors
+        let model_types: HashSet<_> = tensors
             .iter()
-            .filter_map(|(name, shape)| ModelType::from_tensor_name(&name, &shape))
+            .filter_map(|(name, shape)| ModelType::from_tensor_name(name, shape))
             .collect();
-        if model_types.contains(&ModelType::SdxlUnetLora) {
-            model_types.remove(&ModelType::SdUnetLora);
-        }
         let mut model_types: Vec<_> = model_types.into_iter().collect();
         model_types.sort();
 
