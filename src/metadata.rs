@@ -10,10 +10,10 @@ use tinyjson::JsonValue;
 
 #[derive(Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
 pub enum ModelType {
-    Sd15Checkpoint,
+    SdCheckpoint,
     SdxlCheckpoint,
-    Sd15UnetLora,
-    Sd15ClipLora,
+    SdUnetLora,
+    SdClipLora,
     SdxlUnetLora,
     SdxlClipLora,
     BakedVae,
@@ -24,35 +24,54 @@ impl ModelType {
     ///
     /// Given a tensor name, this function _may_ return the type of model it belongs to. In
     /// general, it only returns a non-None value for tensor names that are unique to a model type.
-    fn from_tensor_name(name: &str) -> Option<ModelType> {
+    fn from_tensor_name(name: &str, shape: &[usize]) -> Option<ModelType> {
+        // Text LoRAs are easily distinguished, because SDXL has two text models referred to as te1
+        // and te2. SD only has a single model, referred to as te.
         if name.starts_with("lora_te_") {
-            Some(ModelType::Sd15ClipLora)
-        } else if name.starts_with("lora_unet_down_") {
-            Some(ModelType::Sd15UnetLora)
-        } else if name.starts_with("lora_te1_") {
-            Some(ModelType::SdxlClipLora)
-        } else if name.starts_with("lora_unet_input_") {
-            Some(ModelType::SdxlUnetLora)
-        } else if name.starts_with("conditioner.") {
-            Some(ModelType::SdxlCheckpoint)
-        } else if name.starts_with("cond_stage_model.") {
-            Some(ModelType::Sd15Checkpoint)
-        } else if name.starts_with("encoder.") {
-            Some(ModelType::StandaloneVae)
-        } else if name.starts_with("first_stage_model.") {
-            Some(ModelType::BakedVae)
-        } else {
-            None
+            return Some(ModelType::SdClipLora);
         }
+        if name.starts_with("lora_te1_") {
+            return Some(ModelType::SdxlClipLora);
+        }
+
+        // The same applies to checkpoints: SDXL has two text models, and SD only has one.
+        if name.starts_with("conditioner.embedders.0.") {
+            return Some(ModelType::SdxlCheckpoint);
+        }
+        if name.starts_with("cond_stage_model.") {
+            return Some(ModelType::SdCheckpoint);
+        }
+
+        // Standalone and baked-in VAEs have easily recognized model names
+        if name.starts_with("encoder.") {
+            return Some(ModelType::StandaloneVae);
+        }
+        if name.starts_with("first_stage_model.") {
+            return Some(ModelType::BakedVae);
+        }
+
+        // SD LoRAs _usually_ use lora_unet_down and SDXL LoRAs use lora_unet_input, but this is
+        // not reliable. 5120 channels clearly indicates an SDXL UNet, and we can easily
+        // post-process to remove the SD tag if the SDXL one was detected for another tensor.
+        if (name.starts_with("lora_unet_down_") || name.starts_with("lora_unet_input_"))
+            && shape.len() == 2
+        {
+            return match shape[0] {
+                5120 => Some(ModelType::SdxlUnetLora),
+                _ => Some(ModelType::SdUnetLora),
+            };
+        }
+
+        None
     }
 }
 impl ToString for ModelType {
     fn to_string(&self) -> String {
         match self {
-            ModelType::Sd15Checkpoint => "SD1.5 Checkpoint",
+            ModelType::SdCheckpoint => "SD Checkpoint",
             ModelType::SdxlCheckpoint => "SDXL Checkpoint",
-            ModelType::Sd15UnetLora => "SD1.5 UNet LoRA",
-            ModelType::Sd15ClipLora => "SD1.5 CLIP LoRA",
+            ModelType::SdUnetLora => "SD UNet LoRA",
+            ModelType::SdClipLora => "SD CLIP LoRA",
             ModelType::SdxlUnetLora => "SDXL UNet LoRA",
             ModelType::SdxlClipLora => "SDXL CLIP LoRA",
             ModelType::BakedVae => "Baked-in VAE",
@@ -119,11 +138,15 @@ impl LoraData {
             .iter()
             .map(|name| Ok((name.to_string(), tensors.tensor(name)?.shape().to_vec())))
             .collect();
+        let tensors = tensors.unwrap_or_default();
 
-        let model_types: HashSet<_> = names
-            .into_iter()
-            .filter_map(|name| ModelType::from_tensor_name(name))
+        let mut model_types: HashSet<_> = tensors
+            .iter()
+            .filter_map(|(name, shape)| ModelType::from_tensor_name(&name, &shape))
             .collect();
+        if model_types.contains(&ModelType::SdxlUnetLora) {
+            model_types.remove(&ModelType::SdUnetLora);
+        }
         let mut model_types: Vec<_> = model_types.into_iter().collect();
         model_types.sort();
 
@@ -136,7 +159,7 @@ impl LoraData {
             base_model: metadata
                 .get(&"ss_sd_model_name".to_string())
                 .map(|s| s.to_string()),
-            tensors: tensors.unwrap_or_default(),
+            tensors,
             model_types,
         })
     }
