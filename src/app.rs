@@ -2,6 +2,7 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::LazyLock,
 };
 
 use eframe::egui;
@@ -10,6 +11,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::metadata::{read_header, LoraData};
 
+type MetadataRecord = (PathBuf, LazyLock<LoraData, Box<dyn FnOnce() -> LoraData>>);
+
+fn metadata_record(path: &Path) -> MetadataRecord {
+    let path = path.to_path_buf();
+    (
+        path.clone(),
+        LazyLock::new(Box::new(move || {
+            if let Ok(buffer) = read_header(&path) {
+                LoraData::from_buffer(&buffer).unwrap_or_default()
+            } else {
+                Default::default()
+            }
+        })),
+    )
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct App {
     lora_file: Option<PathBuf>,
@@ -17,7 +34,7 @@ pub struct App {
     #[serde(skip)]
     open_dialog: Option<FileDialog>,
     #[serde(skip)]
-    metadata: Option<Vec<(PathBuf, Option<LoraData>)>>,
+    metadata: Option<Vec<MetadataRecord>>,
     metadata_dialog: bool,
     tensors_dialog: bool,
 }
@@ -107,7 +124,7 @@ impl eframe::App for App {
             if let Some(lora) = &self.lora_file {
                 if lora.is_file() {
                     // If the path is a single file, we just have one record
-                    self.metadata = Some(vec![(lora.clone(), None)]);
+                    self.metadata = Some(vec![metadata_record(lora)]);
                 } else if lora.is_dir() {
                     // Otherwise scan the directory and add all safetensors files
                     if let Ok(files) = std::fs::read_dir(lora) {
@@ -119,7 +136,7 @@ impl eframe::App for App {
                                     f.ok().and_then(|f| {
                                         let path = f.path();
                                         if path.is_file() && path.extension() == ext {
-                                            Some((path, None))
+                                            Some(metadata_record(&path))
                                         } else {
                                             None
                                         }
@@ -165,19 +182,6 @@ impl eframe::App for App {
             }
         }
 
-        // Ensure that the metadata for the selected LoRA is actually loaded
-        if let Some(ref mut metadata) = &mut self.metadata {
-            if self.selected < metadata.len() && metadata[self.selected].1.is_none() {
-                let path = &metadata[self.selected].0;
-                if let Ok(buffer) = read_header(path) {
-                    metadata[self.selected].1 =
-                        Some(LoraData::from_buffer(&buffer).unwrap_or_default());
-                } else {
-                    metadata[self.selected].1 = Some(Default::default());
-                }
-            }
-        }
-
         // Get a reference to the selected entry, if it exists. The metadata is guaranteed to be
         // defined, even if the file couldn't be loaded
         let selected = self.metadata.as_ref().and_then(|m| m.get(self.selected));
@@ -201,7 +205,7 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label("Model type: ");
                 if let Some(metadata) = selected {
-                    for model in &metadata.1.as_ref().unwrap().model_types {
+                    for model in &metadata.1.model_types {
                         ui.label(model.to_string());
                     }
                 }
@@ -209,8 +213,7 @@ impl eframe::App for App {
 
             ui.horizontal(|ui| {
                 ui.label("Base checkpoint: ");
-                if let Some(metadata) = selected {
-                    let metadata = metadata.1.as_ref().unwrap();
+                if let Some((_, metadata)) = selected {
                     ui.label(
                         metadata
                             .base_model
@@ -222,8 +225,7 @@ impl eframe::App for App {
 
             ui.separator();
 
-            if let Some(metadata) = selected {
-                let metadata = metadata.1.as_ref().unwrap();
+            if let Some((_, metadata)) = selected {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -242,7 +244,7 @@ impl eframe::App for App {
             }
         });
 
-        if let Some(metadata) = selected {
+        if let Some((_, metadata)) = selected {
             if self.metadata_dialog {
                 ctx.show_viewport_immediate(
                     egui::ViewportId::from_hash_of("metadata_window"),
@@ -253,7 +255,6 @@ impl eframe::App for App {
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.metadata_dialog = false;
                         }
-                        let metadata = metadata.1.as_ref().unwrap();
                         let mut metadata: Vec<_> = metadata.raw_metadata.iter().collect();
                         metadata.sort();
                         egui::CentralPanel::default().show(ctx, |ui| {
@@ -285,7 +286,6 @@ impl eframe::App for App {
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.tensors_dialog = false;
                         }
-                        let metadata = metadata.1.as_ref().unwrap();
                         egui::CentralPanel::default().show(ctx, |ui| {
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
