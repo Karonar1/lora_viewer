@@ -4,7 +4,7 @@ use std::{
     str::FromStr,
     sync::{
         mpsc::{channel, Sender},
-        Arc, LazyLock,
+        Arc, LazyLock, Mutex,
     },
     thread,
 };
@@ -47,6 +47,8 @@ pub struct App {
     tensors_dialog: bool,
     #[serde(skip)]
     background_loader: Option<Sender<MetadataStore>>,
+    #[serde(skip)]
+    loader_state: Arc<Mutex<(usize, usize)>>,
 }
 
 impl App {
@@ -64,12 +66,16 @@ impl App {
         let (send, recv) = channel();
         app.background_loader = Some(send);
 
+        let ctx = cc.egui_ctx.clone();
+        let state = app.loader_state.clone();
         thread::spawn(move || loop {
             let mut store = recv.recv().unwrap();
             let mut i = 0;
             while i < store.len() {
                 LazyLock::force(&store[i].1);
                 i += 1;
+                *state.lock().unwrap() = (i, store.len());
+                ctx.request_repaint();
                 match recv.try_recv() {
                     Ok(new_store) => {
                         store = new_store;
@@ -189,12 +195,16 @@ impl eframe::App for App {
             }
         }
 
-        // We may now assume that if a path is defined, metadata is valid
-
         // If our path is to a directory, add a side panel to select LoRAs
         if let Some(path) = &self.lora_file {
             if path.is_dir() {
                 egui::SidePanel::left("left_panel").show(ctx, |ui| {
+                    let (loaded, total) = *self.loader_state.lock().unwrap();
+                    if loaded < total {
+                        ui.label(format!("Scanning {loaded} / {total}"));
+                        ui.separator();
+                    }
+
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
