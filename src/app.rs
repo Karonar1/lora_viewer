@@ -2,7 +2,11 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::LazyLock,
+    sync::{
+        mpsc::{channel, Sender},
+        Arc, LazyLock,
+    },
+    thread,
 };
 
 use eframe::egui;
@@ -11,7 +15,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::metadata::{read_header, LoraData};
 
-type MetadataRecord = (PathBuf, LazyLock<LoraData, Box<dyn FnOnce() -> LoraData>>);
+type MetadataRecord = (
+    PathBuf,
+    LazyLock<LoraData, Box<dyn FnOnce() -> LoraData + Send + Sync + 'static>>,
+);
+type MetadataStore = Arc<Vec<MetadataRecord>>;
 
 fn metadata_record(path: &Path) -> MetadataRecord {
     let path = path.to_path_buf();
@@ -34,14 +42,16 @@ pub struct App {
     #[serde(skip)]
     open_dialog: Option<FileDialog>,
     #[serde(skip)]
-    metadata: Option<Vec<MetadataRecord>>,
+    metadata: Option<MetadataStore>,
     metadata_dialog: bool,
     tensors_dialog: bool,
+    #[serde(skip)]
+    background_loader: Option<Sender<MetadataStore>>,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, path: Option<String>) -> App {
-        if let Some(path) = path {
+        let mut app = if let Some(path) = path {
             App {
                 lora_file: PathBuf::from_str(&path).ok(),
                 ..Default::default()
@@ -50,7 +60,27 @@ impl App {
             eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
         } else {
             Default::default()
-        }
+        };
+        let (send, recv) = channel();
+        app.background_loader = Some(send);
+
+        thread::spawn(move || loop {
+            let mut store = recv.recv().unwrap();
+            let mut i = 0;
+            while i < store.len() {
+                LazyLock::force(&store[i].1);
+                i += 1;
+                match recv.try_recv() {
+                    Ok(new_store) => {
+                        store = new_store;
+                        i = 0;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!(),
+                    Err(_) => (),
+                }
+            }
+        });
+        app
     }
 }
 
@@ -124,12 +154,16 @@ impl eframe::App for App {
             if let Some(lora) = &self.lora_file {
                 if lora.is_file() {
                     // If the path is a single file, we just have one record
-                    self.metadata = Some(vec![metadata_record(lora)]);
+                    let metadata = Arc::new(vec![metadata_record(lora)]);
+                    if let Some(loader) = &self.background_loader {
+                        loader.send(metadata.clone()).ok();
+                    }
+                    self.metadata = Some(metadata);
                 } else if lora.is_dir() {
                     // Otherwise scan the directory and add all safetensors files
                     if let Ok(files) = std::fs::read_dir(lora) {
                         let ext = Some(OsStr::new("safetensors"));
-                        self.metadata = Some({
+                        let metadata = Arc::new({
                             let mut files: Vec<_> = files
                                 .into_iter()
                                 .filter_map(|f| {
@@ -146,6 +180,10 @@ impl eframe::App for App {
                             files.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                             files
                         });
+                        if let Some(loader) = &self.background_loader {
+                            loader.send(metadata.clone()).ok();
+                        }
+                        self.metadata = Some(metadata);
                     }
                 }
             }
