@@ -158,6 +158,7 @@ impl eframe::App for App {
                         self.lora_file = Some(path.to_path_buf());
                         self.metadata = None;
                         self.search_results = None;
+                        *self.loader_state.lock().unwrap() = (0, 0);
                         self.selected = 0;
                         self.metadata_dialog = false;
                         self.tensors_dialog = false;
@@ -222,7 +223,7 @@ impl eframe::App for App {
                     }
 
                     if let Some(metadata) = &self.metadata {
-                        if loaded < total {
+                        if loaded < total || total == 0 {
                             self.search_results = None;
                         } else if self.search_results.is_none() {
                             self.search_results = Some(
