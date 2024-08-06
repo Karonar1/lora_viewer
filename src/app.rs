@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-use eframe::egui;
+use eframe::egui::{self, TextEdit};
 use egui_file::FileDialog;
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +35,13 @@ fn metadata_record(path: &Path) -> MetadataRecord {
     )
 }
 
+#[derive(Eq, PartialEq)]
+enum SearchResult {
+    NoMatch,
+    Name,
+    Tag,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct App {
     lora_file: Option<PathBuf>,
@@ -49,6 +56,9 @@ pub struct App {
     background_loader: Option<Sender<MetadataStore>>,
     #[serde(skip)]
     loader_state: Arc<Mutex<(usize, usize)>>,
+    search_text: String,
+    #[serde(skip)]
+    search_results: Option<Vec<SearchResult>>,
 }
 
 impl App {
@@ -147,6 +157,7 @@ impl eframe::App for App {
                     if let Some(path) = dialog.path() {
                         self.lora_file = Some(path.to_path_buf());
                         self.metadata = None;
+                        self.search_results = None;
                         self.selected = 0;
                         self.metadata_dialog = false;
                         self.tensors_dialog = false;
@@ -203,6 +214,49 @@ impl eframe::App for App {
                     if loaded < total {
                         ui.label(format!("Scanning {loaded} / {total}"));
                         ui.separator();
+                    } else if ui
+                        .add(TextEdit::singleline(&mut self.search_text))
+                        .changed()
+                    {
+                        self.search_results = None;
+                    }
+
+                    if let Some(metadata) = &self.metadata {
+                        if loaded < total {
+                            self.search_results = None;
+                        } else if self.search_results.is_none() {
+                            self.search_results = Some(
+                                metadata
+                                    .iter()
+                                    .map(|model| {
+                                        let name_match = model
+                                            .0
+                                            .file_name()
+                                            .and_then(|s| {
+                                                s.to_str().map(|s| {
+                                                    s.to_ascii_lowercase().contains(
+                                                        &self.search_text.to_ascii_lowercase(),
+                                                    )
+                                                })
+                                            })
+                                            .unwrap_or(false);
+                                        let tag_match =
+                                            model.1.tag_frequencies.iter().any(|(tag, _)| {
+                                                tag.to_ascii_lowercase().contains(
+                                                    &self.search_text.to_ascii_lowercase(),
+                                                )
+                                            });
+                                        if name_match {
+                                            SearchResult::Name
+                                        } else if tag_match {
+                                            SearchResult::Tag
+                                        } else {
+                                            SearchResult::NoMatch
+                                        }
+                                    })
+                                    .collect(),
+                            );
+                        }
                     }
 
                     egui::ScrollArea::vertical()
@@ -212,17 +266,22 @@ impl eframe::App for App {
 
                             if let Some(metadata) = &self.metadata {
                                 for (index, (path, _)) in metadata.iter().enumerate() {
-                                    if ui
-                                        .add(egui::widgets::SelectableLabel::new(
-                                            index == selected,
-                                            path.file_name().unwrap().to_string_lossy(),
-                                        ))
-                                        .clicked()
+                                    if self.search_results.is_none()
+                                        || self.search_results.as_ref().unwrap()[index]
+                                            != SearchResult::NoMatch
                                     {
-                                        self.selected = index;
-                                        self.metadata_dialog = false;
-                                        self.tensors_dialog = false;
-                                    };
+                                        if ui
+                                            .add(egui::widgets::SelectableLabel::new(
+                                                index == selected,
+                                                path.file_name().unwrap().to_string_lossy(),
+                                            ))
+                                            .clicked()
+                                        {
+                                            self.selected = index;
+                                            self.metadata_dialog = false;
+                                            self.tensors_dialog = false;
+                                        };
+                                    }
                                 }
                             }
                         });
