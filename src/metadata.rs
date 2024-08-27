@@ -14,6 +14,7 @@ pub enum NetworkType {
     Unet,
     SdClip,
     SdxlClip,
+    Transformer,
 }
 impl Display for NetworkType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -21,6 +22,7 @@ impl Display for NetworkType {
             NetworkType::Unet => "UNet",
             NetworkType::SdClip => "SD Clip",
             NetworkType::SdxlClip => "SDXL Clip",
+            NetworkType::Transformer => "Flux Transformer",
         })
     }
 }
@@ -82,14 +84,20 @@ impl ModelType {
             NetworkType::SdClip
         } else if name.starts_with("lora_te1_") {
             NetworkType::SdxlClip
-        } else if name.starts_with("lora_unet_down_") || name.starts_with("lora_unet_input_") {
+        } else if name.starts_with("transformer.") {
+            NetworkType::Transformer
+        } else if name.starts_with("lora_unet_") {
             NetworkType::Unet
         } else {
             return None;
         };
 
         // All remaining model types we recognize are some kind of LoRA, so find the subtype first
-        let lora_type = if name.ends_with("lora_down.weight") || name.ends_with("lora_up.weight") {
+        let lora_type = if name.ends_with("lora_down.weight")
+            || name.ends_with("lora_up.weight")
+            || name.ends_with("lora_A.weight")
+            || name.ends_with("lora_B.weight")
+        {
             LoraType::LoRA(model)
         } else if name.ends_with("hada_w1_a") {
             LoraType::LoHa(model)
