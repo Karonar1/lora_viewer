@@ -85,8 +85,8 @@ impl Analysis {
 
                 // Calculate mean of each row
                 let magnitudes = prod.sum(1).ok()?.sqrt().ok()?;
-                let mean = magnitudes.mean_all().ok()?;
-                let variance = (magnitudes.sqr().ok()?.mean_all().ok()? - mean.sqr().ok()?).ok()?;
+                let mean = magnitudes.mean(0).ok()?;
+                let variance = magnitudes.var(0).ok()?;
 
                 let count = magnitudes
                     .broadcast_gt(&mean)
