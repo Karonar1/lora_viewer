@@ -61,9 +61,9 @@ impl Analysis {
             })
             .collect();
 
-        let results: Vec<_> = names
+        let mut results: Vec<_> = names
             .into_iter()
-            .filter_map(|(up, down)| {
+            .filter_map(|(down, up)| {
                 let name = down.clone();
                 let down = tensors
                     .get(&down)
@@ -95,6 +95,7 @@ impl Analysis {
                 ))
             })
             .collect();
+        results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
         Ok(Analysis { results })
     }
 }
@@ -510,8 +511,8 @@ impl eframe::App for App {
                                                 &self.analysis.as_ref().unwrap().results
                                             {
                                                 ui.label(name);
-                                                ui.label(format!("{mean:.2}"));
-                                                ui.label(format!("{variance:.2}"));
+                                                ui.label(format!("{mean:.6}"));
+                                                ui.label(format!("{variance:.6}"));
                                                 ui.allocate_space(egui::vec2(
                                                     ui.available_width(),
                                                     0.0,
