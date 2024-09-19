@@ -9,6 +9,8 @@ use std::{
     thread,
 };
 
+use anyhow::{anyhow, Result};
+use candle_core::{Device, Tensor};
 use eframe::egui::{self, TextEdit};
 use egui_file::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -42,6 +44,41 @@ enum SearchResult {
     Tag,
 }
 
+struct Analysis {
+    
+}
+impl Analysis {
+    fn new(path: &Path) -> Result<Analysis>
+    {
+        let tensors = candle_core::safetensors::load(path, &Device::Cpu)?;
+        let names:Vec<_> = tensors.keys().filter_map(|name| {
+            if name.contains(".lora_down.weight") {
+                Some((name.to_string(), name.replace("lora_down", "lora_up")))
+            } else { None }
+        }).collect();
+
+        for (down, up) in names {
+            let down = tensors.get(&down).ok_or(anyhow!("Failed to get tensor"))?;
+            let up = tensors.get(&up).ok_or(anyhow!("Failed to get tensor"))?;
+            if down.shape().dims().len() != 2 { continue; }
+
+            let up = up.to_dtype(candle_core::DType::F32)?;
+            let down = down.to_dtype(candle_core::DType::F32)?;
+
+            // Convert to full residual matrix and square each element
+            let prod = up.matmul(&down)?.sqr()?;
+
+            // Calculate mean of each row
+            let means = prod.sum(1)?.sqrt()?;
+
+            let variance = (prod.sum_all()?.sqrt()? - means.mean_all()?.sqr()?)?;
+
+            dbg!(variance.to_scalar::<f32>()?);
+        }
+        Ok(Analysis {  })
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct App {
     lora_file: Option<PathBuf>,
@@ -59,6 +96,8 @@ pub struct App {
     search_text: String,
     #[serde(skip)]
     search_results: Option<Vec<SearchResult>>,
+    #[serde(skip)]
+    analysis: Option<Analysis>
 }
 
 impl App {
@@ -306,6 +345,9 @@ impl eframe::App for App {
                     }
                     if ui.button("Tensors").clicked() {
                         self.tensors_dialog = true;
+                    }
+                    if ui.button("Analysis").clicked() {
+                        let _ = Analysis::new(self.lora_file.as_ref().unwrap());
                     }
                 }
             });

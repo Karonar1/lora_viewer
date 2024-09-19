@@ -13,3 +13,4 @@ clap = { version = "4.5.4", features = ["derive"] }
 eframe = { version = "0.28.1", features = ["persistence"] }
 egui_file = "0.18.0"
 serde = { version = "1.0.204", features = ["derive"] }
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.6.1" }
