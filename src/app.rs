@@ -104,7 +104,7 @@ impl Analysis {
                 ))
             })
             .collect();
-        results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+        results.sort_by(|a, b| b.3.cmp(&a.3));
         Ok(Analysis { results })
     }
 }
