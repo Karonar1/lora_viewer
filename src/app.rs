@@ -91,7 +91,7 @@ impl Analysis {
                 Some((
                     name,
                     mean.to_scalar::<f32>().ok()?,
-                    variance.to_scalar::<f32>().ok()?,
+                    variance.sqrt().ok()?.to_scalar::<f32>().ok()?,
                 ))
             })
             .collect();
