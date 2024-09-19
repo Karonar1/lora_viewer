@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use candle_core::Device;
 use eframe::egui::{self, TextEdit};
 use egui_file::FileDialog;
@@ -61,32 +61,31 @@ impl Analysis {
             })
             .collect();
 
-        let results: Result<Vec<_>> = names
+        let results: Vec<_> = names
             .into_iter()
-            .map(|(up, down)| {
+            .filter_map(|(up, down)| {
                 let name = down.clone();
-                let down = tensors.get(&down).ok_or(anyhow!("Failed to get tensor"))?;
-                let up = tensors.get(&up).ok_or(anyhow!("Failed to get tensor"))?;
+                let down = tensors.get(&down).ok_or(anyhow!("Failed to get tensor")).ok()?;
+                let up = tensors.get(&up).ok_or(anyhow!("Failed to get tensor")).ok()?;
                 if down.shape().dims().len() != 2 {
-                    bail!("Unexpected number of dimensions")
+                    return None;
                 }
 
-                let up = up.to_dtype(candle_core::DType::F32)?;
-                let down = down.to_dtype(candle_core::DType::F32)?;
+                let up = up.to_dtype(candle_core::DType::F32).ok()?;
+                let down = down.to_dtype(candle_core::DType::F32).ok()?;
 
                 // Convert to full residual matrix and square each element
-                let prod = up.matmul(&down)?.sqr()?;
+                let prod = up.matmul(&down).ok()?.sqr().ok()?;
 
                 // Calculate mean of each row
-                let means = prod.sum(1)?.sqrt()?;
+                let magnitudes = prod.sum(1).ok()?.sqrt().ok()?;
+                let mean = magnitudes.mean_all().ok()?;
+                let variance = (prod.sum_all().ok()?.sqrt().ok()? - mean.sqr().ok()?).ok()?;
 
-                let mean = means.mean_all()?;
-                let variance = (prod.sum_all()?.sqrt()? - mean.sqr()?)?;
-
-                Ok((name, mean.to_scalar::<f32>()?, variance.to_scalar::<f32>()?))
+                Some((name, mean.to_scalar::<f32>().ok()?, variance.to_scalar::<f32>().ok()?))
             })
             .collect();
-        Ok(Analysis { results: results? })
+        Ok(Analysis { results })
     }
 }
 
@@ -358,7 +357,9 @@ impl eframe::App for App {
                         self.tensors_dialog = true;
                     }
                     if ui.button("Analysis").clicked() {
-                        let _ = Analysis::new(self.lora_file.as_ref().unwrap());
+                        if let Some(metadata) = selected {
+                            self.analysis = Analysis::new(&metadata.0).ok();
+                        }
                     }
                 }
             });
