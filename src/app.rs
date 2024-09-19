@@ -45,7 +45,7 @@ enum SearchResult {
 }
 
 struct Analysis {
-    results: Vec<(String, f32, f32)>,
+    results: Vec<(String, f32, f32, u32)>,
 }
 impl Analysis {
     fn new(path: &Path) -> Result<Analysis> {
@@ -88,10 +88,19 @@ impl Analysis {
                 let mean = magnitudes.mean_all().ok()?;
                 let variance = (magnitudes.sqr().ok()?.mean_all().ok()? - mean.sqr().ok()?).ok()?;
 
+                let count = magnitudes
+                    .broadcast_gt(&mean)
+                    .ok()?
+                    .to_dtype(candle_core::DType::U32)
+                    .ok()?
+                    .sum_all()
+                    .ok()?;
+
                 Some((
                     name,
                     mean.to_scalar::<f32>().ok()?,
                     variance.sqrt().ok()?.to_scalar::<f32>().ok()?,
+                    count.to_scalar::<u32>().ok()?,
                 ))
             })
             .collect();
@@ -504,15 +513,16 @@ impl eframe::App for App {
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     egui::Grid::new("analysis_tensors")
-                                        .num_columns(4)
+                                        .num_columns(5)
                                         .striped(true)
                                         .show(ui, |ui| {
-                                            for (name, mean, variance) in
+                                            for (name, mean, variance, count) in
                                                 &self.analysis.as_ref().unwrap().results
                                             {
                                                 ui.label(name);
                                                 ui.label(format!("{mean:.6}"));
                                                 ui.label(format!("{variance:.6}"));
+                                                ui.label(format!("{count}"));
                                                 ui.allocate_space(egui::vec2(
                                                     ui.available_width(),
                                                     0.0,
