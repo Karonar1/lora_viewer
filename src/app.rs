@@ -9,8 +9,8 @@ use std::{
     thread,
 };
 
-use anyhow::{anyhow, Result};
-use candle_core::{Device, Tensor};
+use anyhow::{anyhow, bail, Result};
+use candle_core::Device;
 use eframe::egui::{self, TextEdit};
 use egui_file::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -45,37 +45,48 @@ enum SearchResult {
 }
 
 struct Analysis {
-    
+    results: Vec<(String, f32, f32)>,
 }
 impl Analysis {
-    fn new(path: &Path) -> Result<Analysis>
-    {
+    fn new(path: &Path) -> Result<Analysis> {
         let tensors = candle_core::safetensors::load(path, &Device::Cpu)?;
-        let names:Vec<_> = tensors.keys().filter_map(|name| {
-            if name.contains(".lora_down.weight") {
-                Some((name.to_string(), name.replace("lora_down", "lora_up")))
-            } else { None }
-        }).collect();
+        let names: Vec<_> = tensors
+            .keys()
+            .filter_map(|name| {
+                if name.contains(".lora_down.weight") {
+                    Some((name.to_string(), name.replace("lora_down", "lora_up")))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-        for (down, up) in names {
-            let down = tensors.get(&down).ok_or(anyhow!("Failed to get tensor"))?;
-            let up = tensors.get(&up).ok_or(anyhow!("Failed to get tensor"))?;
-            if down.shape().dims().len() != 2 { continue; }
+        let results: Result<Vec<_>> = names
+            .into_iter()
+            .map(|(up, down)| {
+                let name = down.clone();
+                let down = tensors.get(&down).ok_or(anyhow!("Failed to get tensor"))?;
+                let up = tensors.get(&up).ok_or(anyhow!("Failed to get tensor"))?;
+                if down.shape().dims().len() != 2 {
+                    bail!("Unexpected number of dimensions")
+                }
 
-            let up = up.to_dtype(candle_core::DType::F32)?;
-            let down = down.to_dtype(candle_core::DType::F32)?;
+                let up = up.to_dtype(candle_core::DType::F32)?;
+                let down = down.to_dtype(candle_core::DType::F32)?;
 
-            // Convert to full residual matrix and square each element
-            let prod = up.matmul(&down)?.sqr()?;
+                // Convert to full residual matrix and square each element
+                let prod = up.matmul(&down)?.sqr()?;
 
-            // Calculate mean of each row
-            let means = prod.sum(1)?.sqrt()?;
+                // Calculate mean of each row
+                let means = prod.sum(1)?.sqrt()?;
 
-            let variance = (prod.sum_all()?.sqrt()? - means.mean_all()?.sqr()?)?;
+                let mean = means.mean_all()?;
+                let variance = (prod.sum_all()?.sqrt()? - mean.sqr()?)?;
 
-            dbg!(variance.to_scalar::<f32>()?);
-        }
-        Ok(Analysis {  })
+                Ok((name, mean.to_scalar::<f32>()?, variance.to_scalar::<f32>()?))
+            })
+            .collect();
+        Ok(Analysis { results: results? })
     }
 }
 
@@ -97,7 +108,7 @@ pub struct App {
     #[serde(skip)]
     search_results: Option<Vec<SearchResult>>,
     #[serde(skip)]
-    analysis: Option<Analysis>
+    analysis: Option<Analysis>,
 }
 
 impl App {
@@ -464,6 +475,44 @@ impl eframe::App for App {
         } else {
             self.metadata_dialog = false;
             self.tensors_dialog = false;
+        }
+
+        if self.analysis.is_some() {
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("analysis_window"),
+                egui::ViewportBuilder::default()
+                    .with_title("Tensor analysis")
+                    .with_inner_size([600.0, 300.0]),
+                |ctx, _class| {
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        self.analysis = None;
+                    } else {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    egui::Grid::new("analysis_tensors")
+                                        .num_columns(4)
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            for (name, mean, variance) in
+                                                &self.analysis.as_ref().unwrap().results
+                                            {
+                                                ui.label(name);
+                                                ui.label(format!("{mean:.2}"));
+                                                ui.label(format!("{variance:.2}"));
+                                                ui.allocate_space(egui::vec2(
+                                                    ui.available_width(),
+                                                    0.0,
+                                                ));
+                                                ui.end_row();
+                                            }
+                                        })
+                                })
+                        });
+                    }
+                },
+            );
         }
     }
 }
