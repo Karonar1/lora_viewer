@@ -65,8 +65,14 @@ impl Analysis {
             .into_iter()
             .filter_map(|(up, down)| {
                 let name = down.clone();
-                let down = tensors.get(&down).ok_or(anyhow!("Failed to get tensor")).ok()?;
-                let up = tensors.get(&up).ok_or(anyhow!("Failed to get tensor")).ok()?;
+                let down = tensors
+                    .get(&down)
+                    .ok_or(anyhow!("Failed to get tensor"))
+                    .ok()?;
+                let up = tensors
+                    .get(&up)
+                    .ok_or(anyhow!("Failed to get tensor"))
+                    .ok()?;
                 if down.shape().dims().len() != 2 {
                     return None;
                 }
@@ -80,9 +86,13 @@ impl Analysis {
                 // Calculate mean of each row
                 let magnitudes = prod.sum(1).ok()?.sqrt().ok()?;
                 let mean = magnitudes.mean_all().ok()?;
-                let variance = (prod.sum_all().ok()?.sqrt().ok()? - mean.sqr().ok()?).ok()?;
+                let variance = (magnitudes.sqr().ok()?.mean_all().ok()? - mean.sqr().ok()?).ok()?;
 
-                Some((name, mean.to_scalar::<f32>().ok()?, variance.to_scalar::<f32>().ok()?))
+                Some((
+                    name,
+                    mean.to_scalar::<f32>().ok()?,
+                    variance.to_scalar::<f32>().ok()?,
+                ))
             })
             .collect();
         Ok(Analysis { results })
